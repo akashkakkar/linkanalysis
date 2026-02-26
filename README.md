@@ -1,75 +1,91 @@
-# 🔗 Link Analyzer Agent
+# 🔗 Link Analyzer
 
-AI-powered WhatsApp chat link analysis using **Claude API**. Parses shared links, sends them to Claude for intelligent categorization, and generates a professional Excel report.
+Parse WhatsApp chat exports, categorize every shared link, and generate a professional Excel report. Comes in two modes — pick what fits.
 
-## Why AI?
+## Which Mode Should I Use?
 
-Unlike keyword-matching scripts, this agent uses Claude to **understand context**:
-- A URL with "code" in a Claude context → Claude/Anthropic, not Coding
-- A Stanford link about AI safety → Education, not just "stanford keyword match"
-- A LinkedIn post about "hiring AI agents" → Career/Jobs, not AI Agents
-- Generates human-readable topic summaries for every link
+| | **AI Mode** (`analyze_ai.py`) | **Regex Mode** (`analyze_regex.py`) |
+|---|---|---|
+| **How it works** | Sends URLs to Claude API in batches — Claude reads the URL structure and uses judgment to categorize | Matches keywords in URL slugs against a rule list |
+| **Accuracy** | Higher — understands context (e.g. "hiring AI agents" → Career, not AI Agents) | Good for clear-cut URLs, misses ambiguous ones |
+| **Extra output** | AI-generated topic summary per link | No summaries |
+| **Speed** | ~30 sec for 450 links | Instant |
+| **Cost** | ~$0.10–0.15 per run (Claude Sonnet) | Free |
+| **Requires** | Anthropic API key | Nothing beyond Python + openpyxl |
+| **Works offline** | No | Yes |
+
+**Rule of thumb:** Use AI mode when accuracy matters. Use regex mode for quick-and-dirty runs, offline use, or if you don't have an API key.
 
 ## Quick Start
 
+### AI Mode (default)
+
 ```bash
-# Install
 pip install -r requirements.txt
 
-# Set API key
-export ANTHROPIC_API_KEY='sk-ant-...'
+# Add your API key (one-time)
+echo 'ANTHROPIC_API_KEY=sk-ant-your-key-here' > .env
 
 # Run
-python analyze.py chat_export.txt output.xlsx
-
-# Or use the runner
-chmod +x run.sh
-./run.sh chat_export.txt
+./run.sh chat.txt
 ```
 
-## How It Works
+Get your API key at: https://console.anthropic.com/settings/keys
 
-```
-WhatsApp .txt → [Regex Parser] → URLs + dates
-              → [Claude API ×N batches] → categories, scores, summaries
-              → [openpyxl] → formatted Excel workbook
+### Regex Mode (offline, free)
+
+```bash
+pip install openpyxl
+
+./run.sh --regex chat.txt
 ```
 
-1. **Parse** — Regex extracts URLs and timestamps (deterministic, fast)
-2. **Analyze** — URLs sent to Claude Sonnet in batches of 30 for categorization
-3. **Generate** — Results written to a 3-sheet Excel workbook
+### Direct Python
+
+```bash
+python analyze_ai.py chat.txt output.xlsx        # AI mode
+python analyze_regex.py chat.txt output.xlsx      # regex mode
+cat chat.txt | python analyze_ai.py - output.xlsx # pipe from stdin
+```
 
 ## Output
 
+Both modes produce a 3-sheet Excel workbook:
+
 | Sheet | Contents |
 |-------|----------|
-| **All Links** | S.No, Date, Link, Category, **AI Topic Summary**, Claude flag, Relevance |
+| **All Links** | S.No, Date, Link, Category, Claude flag, Relevance (+ Topic Summary in AI mode) |
 | **Claude Topics** | Claude-specific links with accuracy/verification notes |
-| **Summary** | Stats, model used, category distribution |
+| **Summary** | Stats: total links, date range, category distribution |
 
-## Cost
+## Categories Detected
 
-~459 links = ~16 API calls × ~2K tokens each ≈ **$0.10-0.15** per run (Sonnet pricing).
+Claude/Anthropic, Voice AI / TTS, AI Prompting, RAG / Retrieval, Coding / Dev Tools, AI Agents, Education / Learning, Product Management, Business / Sales, Career / Jobs, Tech Companies, Open Source, Health / Wellness, Finance, India / Culture, AI / ML General, Robotics, YouTube, Facebook, Instagram, Twitter/X
 
 ## Testing
 
 ```bash
-python -m pytest test_analyze.py -v
+pip install pytest
+python -m pytest test_analyze_ai.py -v     # 45 tests (mocked, no API key needed)
+python -m pytest test_analyze_regex.py -v   # 40 tests
 ```
-
-All tests use **mocked API calls** — no real API key or charges needed for testing.
-
-## Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | (required) | Your Anthropic API key |
-| `MODEL` | `claude-sonnet-4-20250514` | Model to use (edit in analyze.py) |
-| `BATCH_SIZE` | 30 | Links per API call |
-| `MAX_RETRIES` | 3 | Retry attempts on failure |
 
 ## Supported Chat Formats
 
 - `DD/MM/YYYY, HH:MM` — standard WhatsApp
 - `[DD/MM/YYYY, HH:MM:SS]` — WhatsApp with brackets
 - `YYYY-MM-DD HH:MM` — ISO format
+
+## File Structure
+
+```
+├── run.sh                 # Unified runner (./run.sh or ./run.sh --regex)
+├── analyze_ai.py          # AI mode — Claude API
+├── analyze_regex.py       # Regex mode — keyword matching
+├── test_analyze_ai.py     # AI tests (mocked)
+├── test_analyze_regex.py  # Regex tests
+├── .env.example           # API key template
+├── requirements.txt
+├── CLAUDE.md              # Claude Code agent instructions
+└── README.md
+```

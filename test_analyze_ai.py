@@ -11,7 +11,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 from openpyxl import load_workbook
 
-from analyze import (
+from analyze_ai import (
     parse_date,
     extract_links,
     analyze_batch_with_claude,
@@ -237,7 +237,7 @@ class TestAIBatchAnalysis:
 
 
 class TestAIFullPipeline:
-    @patch("analyze.anthropic.Anthropic")
+    @patch("analyze_ai.anthropic.Anthropic")
     @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
     def test_full_pipeline_mocked(self, mock_anthropic_class):
         """Full pipeline with mocked API returns correct structure."""
@@ -259,7 +259,7 @@ class TestAIFullPipeline:
             assert "accuracy_note" in r
             assert "topic_summary" in r
 
-    @patch("analyze.anthropic.Anthropic")
+    @patch("analyze_ai.anthropic.Anthropic")
     @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
     def test_claude_links_detected(self, mock_anthropic_class):
         """AI correctly identifies Claude-related links."""
@@ -273,7 +273,7 @@ class TestAIFullPipeline:
         claude_links = [r for r in results if r["claude"]]
         assert len(claude_links) == 4  # claude-code, openclaw, cowork, moltbot
 
-    @patch("analyze.anthropic.Anthropic")
+    @patch("analyze_ai.anthropic.Anthropic")
     @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
     def test_relevance_scores_valid(self, mock_anthropic_class):
         """All relevance scores in 1-5 range."""
@@ -287,7 +287,7 @@ class TestAIFullPipeline:
         for r in results:
             assert 1 <= r["relevance"] <= 5
 
-    @patch("analyze.anthropic.Anthropic")
+    @patch("analyze_ai.anthropic.Anthropic")
     @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
     def test_accuracy_notes_only_for_claude(self, mock_anthropic_class):
         """Non-Claude links have empty accuracy notes."""
@@ -304,7 +304,7 @@ class TestAIFullPipeline:
             else:
                 assert r["accuracy_note"] != ""
 
-    @patch("analyze.anthropic.Anthropic")
+    @patch("analyze_ai.anthropic.Anthropic")
     @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
     def test_topic_summaries_present(self, mock_anthropic_class):
         """Every result has a topic summary."""
@@ -328,11 +328,11 @@ class TestAIFullPipeline:
 
 
 class TestBatching:
-    @patch("analyze.anthropic.Anthropic")
+    @patch("analyze_ai.anthropic.Anthropic")
     @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
     def test_large_input_batched(self, mock_anthropic_class):
         """Links are split into batches of BATCH_SIZE."""
-        from analyze import BATCH_SIZE
+        from analyze_ai import BATCH_SIZE
 
         mock_client = MagicMock()
         mock_anthropic_class.return_value = mock_client

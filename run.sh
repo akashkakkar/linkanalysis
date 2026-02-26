@@ -1,43 +1,45 @@
 #!/bin/bash
-# Link Analyzer Agent — AI-powered link analysis
-# Usage: ./run.sh <chat_export.txt> [output.xlsx]
+# Link Analyzer — unified runner
+# Usage:
+#   ./run.sh <chat_file.txt> [output.xlsx]          ← uses AI (default)
+#   ./run.sh --regex <chat_file.txt> [output.xlsx]   ← uses regex (offline)
 
 set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MODE="ai"
 
-FILE="${1:?Usage: ./run.sh <chat_file.txt> [output.xlsx]}"
+# Parse flags
+if [ "$1" = "--regex" ] || [ "$1" = "-r" ]; then
+    MODE="regex"
+    shift
+fi
+
+FILE="${1:?Usage: ./run.sh [--regex] <chat_file.txt> [output.xlsx]}"
 OUTPUT="${2:-output.xlsx}"
 
-if [ ! -f "$FILE" ]; then
-    echo "❌ File not found: $FILE"
-    exit 1
-fi
+[ ! -f "$FILE" ] && echo "❌ File not found: $FILE" && exit 1
 
-# Load .env file if it exists (so Python dotenv isn't the only path)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$SCRIPT_DIR/.env" ]; then
-    export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
-fi
-
-if [ -z "$ANTHROPIC_API_KEY" ]; then
-    echo "❌ ANTHROPIC_API_KEY not set."
-    echo ""
-    echo "  Option 1 — .env file (recommended):"
-    echo "    Create a .env file in this directory with:"
-    echo "    ANTHROPIC_API_KEY=sk-ant-your-key-here"
-    echo ""
-    echo "  Option 2 — Environment variable:"
-    echo "    export ANTHROPIC_API_KEY='sk-ant-your-key-here'"
-    echo ""
-    echo "  Get your key at: https://console.anthropic.com/settings/keys"
-    exit 1
-fi
-
-# Check dependencies
-for pkg in anthropic openpyxl; do
-    if ! python3 -c "import $pkg" 2>/dev/null; then
-        echo "📦 Installing $pkg..."
-        pip install $pkg -q
+if [ "$MODE" = "ai" ]; then
+    # Load .env if present
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
     fi
-done
 
-python3 "$SCRIPT_DIR/analyze.py" "$FILE" "$OUTPUT"
+    if [ -z "$ANTHROPIC_API_KEY" ]; then
+        echo "❌ ANTHROPIC_API_KEY not set."
+        echo ""
+        echo "  Option A — Add your key:  echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env"
+        echo "  Option B — Use offline:   ./run.sh --regex $FILE"
+        echo ""
+        echo "  Get a key at: https://console.anthropic.com/settings/keys"
+        exit 1
+    fi
+
+    for pkg in anthropic openpyxl; do
+        python3 -c "import $pkg" 2>/dev/null || pip install $pkg -q
+    done
+    python3 "$SCRIPT_DIR/analyze_ai.py" "$FILE" "$OUTPUT"
+else
+    python3 -c "import openpyxl" 2>/dev/null || pip install openpyxl -q
+    python3 "$SCRIPT_DIR/analyze_regex.py" "$FILE" "$OUTPUT"
+fi
