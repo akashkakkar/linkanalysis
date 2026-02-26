@@ -1,5 +1,5 @@
 #!/bin/bash
-# Link Analyzer — Quick runner
+# Link Analyzer Agent — AI-powered link analysis
 # Usage: ./run.sh <chat_export.txt> [output.xlsx]
 
 set -e
@@ -12,10 +12,18 @@ if [ ! -f "$FILE" ]; then
     exit 1
 fi
 
-# Check dependencies
-if ! python3 -c "import openpyxl" 2>/dev/null; then
-    echo "📦 Installing openpyxl..."
-    pip install openpyxl -q
+if [ -z "$ANTHROPIC_API_KEY" ]; then
+    echo "❌ ANTHROPIC_API_KEY not set."
+    echo "   export ANTHROPIC_API_KEY='sk-ant-...'"
+    exit 1
 fi
+
+# Check dependencies
+for pkg in anthropic openpyxl; do
+    if ! python3 -c "import $pkg" 2>/dev/null; then
+        echo "📦 Installing $pkg..."
+        pip install $pkg -q
+    fi
+done
 
 python3 "$(dirname "$0")/analyze.py" "$FILE" "$OUTPUT"

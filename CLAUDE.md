@@ -1,39 +1,52 @@
 # Link Analyzer Agent
 
-You analyze WhatsApp/chat exports containing shared links and produce a structured Excel report.
+AI-powered analysis of WhatsApp/chat link exports using Claude API.
 
 ## Your Job
 
 1. Parse all URLs with timestamps from the input file
-2. Categorize each link by topic (AI, Claude, Voice AI, Business, Education, Health, etc.)
-3. Flag Claude/Anthropic-related links specifically
-4. Score relevance 1-5 (5=Claude, 4=AI/Tech, 3=Business, 2=Social, 1=Utility)
-5. Output a professional Excel workbook with:
-   - **Sheet 1 — All Links**: S.No, Date, Link (hyperlinked), Topic, Claude (Yes/No), Relevance
-   - **Sheet 2 — Claude Topics**: Claude-specific links with accuracy/verification notes
-   - **Sheet 3 — Summary**: Date range, total links, category distribution
+2. Send URLs in batches to Claude API for intelligent categorization
+3. Claude analyzes URL structure, path, slugs to determine:
+   - Category (from 23 predefined categories)
+   - Whether it's Claude/Anthropic related
+   - Relevance score 1-5
+   - Accuracy/verification notes for Claude content
+   - Brief topic summary
+4. Output a professional Excel workbook with 3 sheets
 
 ## How to Run
 
 ```bash
+export ANTHROPIC_API_KEY='sk-ant-...'
 python analyze.py <chat_export.txt> [output.xlsx]
-cat chat.txt | python analyze.py - [output.xlsx]
 ./run.sh <chat_export.txt>
 ```
 
+## Architecture
+
+```
+chat.txt → [Regex Parser] → raw URLs with dates
+         → [Claude API batches] → categories, scores, summaries, notes
+         → [openpyxl] → formatted Excel
+```
+
+- Parsing is deterministic (regex) — no AI needed for extracting URLs
+- Categorization is AI-powered (Claude API) — understands context, not just keywords
+- Excel generation is templated with professional formatting
+
 ## Key Rules
 
-- Use `openpyxl` for Excel (install via `pip install openpyxl`)
-- Claude keywords: claude, anthropic, cowork, openclaw, clawdbot, moltbot, sonnet, opus, haiku
-- **Community vs. Official**: openclaw, clawdbot, zeroclaw, nanoclaw, picoclaw are community projects — NOT official Anthropic products. Always flag this.
-- Links must be clickable hyperlinks in Excel
-- Claude rows highlighted green (#E2EFDA)
-- Headers in dark blue (#2F5496) with white text
-- Always add auto-filter and freeze panes
+- Requires `ANTHROPIC_API_KEY` environment variable
+- Uses `claude-sonnet-4-20250514` model
+- Batches 30 links per API call to balance cost and quality
+- Retries up to 3x on failures with exponential backoff
+- Community vs. Official distinction: openclaw, clawdbot = community, NOT Anthropic official
 
 ## Testing
 
 ```bash
-pip install pytest openpyxl
+pip install pytest anthropic openpyxl
 python -m pytest test_analyze.py -v
 ```
+
+Tests use mocked API calls — no real API key needed for testing.

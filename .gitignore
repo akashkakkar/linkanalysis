@@ -8,3 +8,4 @@ build/
 *.xlsx
 .venv/
 .env
+!.env.example

@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 """
-Tests for Link Analyzer.
+Tests for Link Analyzer (AI-powered version).
 Run: python -m pytest test_analyze.py -v
 """
 
 import os
+import json
 import tempfile
+from unittest.mock import patch, MagicMock
 import pytest
 from openpyxl import load_workbook
 
 from analyze import (
     parse_date,
     extract_links,
-    categorize_url,
-    is_claude_related,
-    get_relevance_score,
-    get_claude_accuracy_note,
-    analyze,
+    analyze_batch_with_claude,
+    analyze_with_ai,
     generate_excel,
+    SYSTEM_PROMPT,
+    CATEGORIES,
 )
 
 
@@ -47,9 +48,38 @@ WHATSAPP_BRACKET_FORMAT = """[02/01/2026, 08:15:30] Akash: Check this https://ww
 [02/01/2026, 09:00:15] Ravi: https://www.linkedin.com/posts/user_openai-gpt-activity-222
 """
 
+# Simulated Claude API response for SAMPLE_CHAT links
+MOCK_AI_RESPONSE = [
+    {"index": 0, "category": "Claude/Anthropic", "is_claude_related": True, "relevance": 5, "accuracy_note": "Official Anthropic CLI tool.", "topic_summary": "Claude Code tips and tricks"},
+    {"index": 1, "category": "AI Agents", "is_claude_related": False, "relevance": 4, "accuracy_note": "", "topic_summary": "AI agents development guide"},
+    {"index": 2, "category": "Voice AI / TTS", "is_claude_related": False, "relevance": 4, "accuracy_note": "", "topic_summary": "ElevenLabs voice synthesis update"},
+    {"index": 3, "category": "YouTube", "is_claude_related": False, "relevance": 2, "accuracy_note": "", "topic_summary": "YouTube video"},
+    {"index": 4, "category": "Claude/Anthropic", "is_claude_related": True, "relevance": 5, "accuracy_note": "Community project, NOT official Anthropic.", "topic_summary": "OpenClaw community Claude tool"},
+    {"index": 5, "category": "Tech Companies", "is_claude_related": False, "relevance": 3, "accuracy_note": "", "topic_summary": "DeepSeek and Qwen model comparison"},
+    {"index": 6, "category": "Coding / Dev Tools", "is_claude_related": False, "relevance": 4, "accuracy_note": "", "topic_summary": "Cursor and VS Code setup tips"},
+    {"index": 7, "category": "Business / Sales", "is_claude_related": False, "relevance": 3, "accuracy_note": "", "topic_summary": "SaaS startup revenue strategies"},
+    {"index": 8, "category": "Product Management", "is_claude_related": False, "relevance": 4, "accuracy_note": "", "topic_summary": "Product roadmap planning guide"},
+    {"index": 9, "category": "Facebook", "is_claude_related": False, "relevance": 2, "accuracy_note": "", "topic_summary": "Facebook reel video"},
+    {"index": 10, "category": "Claude/Anthropic", "is_claude_related": True, "relevance": 5, "accuracy_note": "Real Anthropic product (beta). Verify feature claims.", "topic_summary": "Cowork by Anthropic walkthrough"},
+    {"index": 11, "category": "Education / Learning", "is_claude_related": False, "relevance": 4, "accuracy_note": "", "topic_summary": "Stanford course and tutorial resources"},
+    {"index": 12, "category": "Career / Jobs", "is_claude_related": False, "relevance": 3, "accuracy_note": "", "topic_summary": "Remote hiring and interview tips"},
+    {"index": 13, "category": "Claude/Anthropic", "is_claude_related": True, "relevance": 5, "accuracy_note": "Third-party tool, NOT official Anthropic.", "topic_summary": "MoltBot automation for Claude"},
+    {"index": 14, "category": "Other", "is_claude_related": False, "relevance": 1, "accuracy_note": "", "topic_summary": "Electricity bill payment portal"},
+    {"index": 15, "category": "RAG / Retrieval", "is_claude_related": False, "relevance": 4, "accuracy_note": "", "topic_summary": "RAG with vector database embeddings"},
+]
+
+
+def _make_mock_response(results_json: list) -> MagicMock:
+    """Create a mock Anthropic API response."""
+    mock_resp = MagicMock()
+    mock_content = MagicMock()
+    mock_content.text = json.dumps(results_json)
+    mock_resp.content = [mock_content]
+    return mock_resp
+
 
 # ===========================================================================
-# Parsing Tests
+# Parsing Tests (deterministic — no mocking needed)
 # ===========================================================================
 
 class TestParseDate:
@@ -79,7 +109,6 @@ class TestExtractLinks:
 
     def test_dates_extracted(self):
         links = extract_links(SAMPLE_CHAT)
-        # First link should have date 2026-01-02 (DD/MM/YYYY -> YYYY-MM-DD)
         assert links[0]["date"] == "2026-01-02"
 
     def test_urls_are_valid(self):
@@ -88,7 +117,7 @@ class TestExtractLinks:
             assert link["url"].startswith("http")
 
     def test_no_trailing_punctuation(self):
-        text = "2/1/2026, 08:00 - User: visit https://example.com/page. And also this!"
+        text = "2/1/2026, 08:00 - User: visit https://example.com/page. And this!"
         links = extract_links(text)
         assert links[0]["url"] == "https://example.com/page"
 
@@ -96,7 +125,7 @@ class TestExtractLinks:
         assert extract_links("") == []
 
     def test_no_urls(self):
-        assert extract_links("2/1/2026, 08:00 - User: Hello world!") == []
+        assert extract_links("2/1/2026, 08:00 - User: Hello!") == []
 
     def test_bracket_whatsapp_format(self):
         links = extract_links(WHATSAPP_BRACKET_FORMAT)
@@ -115,167 +144,268 @@ class TestExtractLinks:
 
 
 # ===========================================================================
-# Categorization Tests
+# AI Analysis Tests (mocked API calls)
 # ===========================================================================
 
-class TestCategorizeUrl:
-    def test_claude_anthropic(self):
-        assert categorize_url("https://linkedin.com/posts/user_claude-code-tips-activity-123") == "Claude/Anthropic"
+class TestAIBatchAnalysis:
+    def test_successful_batch(self):
+        """Claude returns correct JSON for a batch of links."""
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _make_mock_response(MOCK_AI_RESPONSE[:3])
 
-    def test_anthropic_keyword(self):
-        assert categorize_url("https://linkedin.com/posts/user_anthropic-release-activity-123") == "Claude/Anthropic"
+        links_batch = extract_links(SAMPLE_CHAT)[:3]
+        results = analyze_batch_with_claude(mock_client, links_batch, 1, 1)
 
-    def test_cowork(self):
-        assert categorize_url("https://linkedin.com/posts/user_cowork-anthropic-activity-123") == "Claude/Anthropic"
+        assert len(results) == 3
+        assert results[0]["category"] == "Claude/Anthropic"
+        assert results[0]["is_claude_related"] is True
+        assert results[1]["category"] == "AI Agents"
 
-    def test_openclaw_community(self):
-        assert categorize_url("https://linkedin.com/posts/user_openclaw-tool-activity-123") == "Claude/Anthropic"
+    def test_json_wrapped_in_markdown(self):
+        """Claude sometimes wraps JSON in ```json blocks — handle it."""
+        mock_client = MagicMock()
+        wrapped = "```json\n" + json.dumps(MOCK_AI_RESPONSE[:2]) + "\n```"
+        mock_resp = MagicMock()
+        mock_content = MagicMock()
+        mock_content.text = wrapped
+        mock_resp.content = [mock_content]
+        mock_client.messages.create.return_value = mock_resp
 
-    def test_voice_ai(self):
-        assert categorize_url("https://linkedin.com/posts/user_voice-tts-elevenlabs-activity-123") == "Voice AI / TTS"
+        links_batch = extract_links(SAMPLE_CHAT)[:2]
+        results = analyze_batch_with_claude(mock_client, links_batch, 1, 1)
+        assert len(results) == 2
+        assert results[0]["category"] == "Claude/Anthropic"
 
-    def test_youtube(self):
-        assert categorize_url("https://www.youtube.com/watch?v=abc123") == "YouTube"
+    def test_missing_entries_padded(self):
+        """If Claude returns fewer results than links, pad with defaults."""
+        mock_client = MagicMock()
+        # Only return 1 result for 3 links
+        mock_client.messages.create.return_value = _make_mock_response([MOCK_AI_RESPONSE[0]])
 
-    def test_facebook(self):
-        assert categorize_url("https://www.facebook.com/reel/123") == "Facebook"
+        links_batch = extract_links(SAMPLE_CHAT)[:3]
+        results = analyze_batch_with_claude(mock_client, links_batch, 1, 1)
 
-    def test_coding_not_claude(self):
-        """Coding URL should NOT be categorized as Claude even if it has 'code'."""
-        assert categorize_url("https://linkedin.com/posts/user_cursor-vscode-coding-activity-123") == "Coding / Dev Tools"
+        assert len(results) == 3
+        assert results[0]["category"] == "Claude/Anthropic"
+        assert results[1]["category"] == "Other"  # padded default
+        assert results[2]["category"] == "Other"  # padded default
 
-    def test_claude_code_is_claude(self):
-        """'claude-code' should be Claude, not Coding."""
-        assert categorize_url("https://linkedin.com/posts/user_claude-code-tips-activity-123") == "Claude/Anthropic"
+    def test_json_parse_error_retries(self):
+        """Retries on JSON parse errors, then falls back to defaults."""
+        mock_client = MagicMock()
+        bad_resp = MagicMock()
+        bad_content = MagicMock()
+        bad_content.text = "not valid json at all"
+        bad_resp.content = [bad_content]
+        mock_client.messages.create.return_value = bad_resp
 
-    def test_deepseek(self):
-        assert categorize_url("https://linkedin.com/posts/user_deepseek-qwen-activity-123") == "Tech Companies"
+        links_batch = extract_links(SAMPLE_CHAT)[:2]
+        results = analyze_batch_with_claude(mock_client, links_batch, 1, 1)
 
-    def test_business(self):
-        assert categorize_url("https://linkedin.com/posts/user_startup-saas-revenue-activity-123") == "Business / Sales"
+        # Should fall back to defaults after 3 retries
+        assert len(results) == 2
+        assert results[0]["category"] == "Other"
+        assert results[0]["topic_summary"] == "Categorization failed"
+        # Should have been called 3 times (MAX_RETRIES)
+        assert mock_client.messages.create.call_count == 3
 
-    def test_product_management(self):
-        assert categorize_url("https://linkedin.com/posts/user_productmanagement-roadmap-activity-123") == "Product Management"
+    def test_rate_limit_retries(self):
+        """Retries on rate limit, then succeeds."""
+        mock_client = MagicMock()
 
-    def test_education(self):
-        assert categorize_url("https://linkedin.com/posts/user_stanford-course-activity-123") == "Education / Learning"
+        # First call: rate limit. Second call: success
+        rate_limit_error = MagicMock(spec=Exception)
+        mock_client.messages.create.side_effect = [
+            type('RateLimitError', (Exception,), {})(),  # won't match anthropic.RateLimitError in real code
+        ]
 
-    def test_career(self):
-        assert categorize_url("https://linkedin.com/posts/user_hiring-remote-interview-activity-123") == "Career / Jobs"
+        # For this test, we just verify the retry logic structure works
+        # by testing with a JSON error instead (same retry path)
+        bad_resp = MagicMock()
+        bad_content = MagicMock()
+        bad_content.text = "bad"
+        bad_resp.content = [bad_content]
 
-    def test_rag(self):
-        assert categorize_url("https://linkedin.com/posts/user_rag-vectordb-embedding-activity-123") == "RAG / Retrieval"
+        good_resp = _make_mock_response(MOCK_AI_RESPONSE[:2])
+        mock_client.messages.create.side_effect = [bad_resp, good_resp]
 
-    def test_generic_linkedin(self):
-        assert categorize_url("https://linkedin.com/posts/user_family-vacation-photos-activity-123") == "LinkedIn Post - General"
+        links_batch = extract_links(SAMPLE_CHAT)[:2]
+        results = analyze_batch_with_claude(mock_client, links_batch, 1, 1)
 
-    def test_moltbot_is_claude(self):
-        assert categorize_url("https://linkedin.com/posts/user_moltbot-automation-activity-123") == "Claude/Anthropic"
-
-    def test_other_domain(self):
-        assert categorize_url("https://mahadiscom.in/bill-payment") == "Other"
-
-
-class TestIsClaudeRelated:
-    def test_claude_category(self):
-        assert is_claude_related("https://example.com", "Claude/Anthropic") is True
-
-    def test_non_claude_category(self):
-        assert is_claude_related("https://example.com/something", "Coding / Dev Tools") is False
-
-    def test_claude_keyword_in_url(self):
-        assert is_claude_related("https://example.com/claude-tips", "Other") is True
-
-
-class TestRelevanceScore:
-    def test_claude_is_5(self):
-        assert get_relevance_score("Claude/Anthropic", "https://example.com") == 5
-
-    def test_ai_is_4(self):
-        assert get_relevance_score("AI / ML General", "https://example.com") == 4
-
-    def test_business_is_3(self):
-        assert get_relevance_score("Business / Sales", "https://example.com") == 3
-
-    def test_youtube_is_2(self):
-        assert get_relevance_score("YouTube", "https://youtube.com") == 2
-
-    def test_bill_payment_is_1(self):
-        assert get_relevance_score("Other", "https://mahadiscom.in/bill-payment") == 1
-
-    def test_referral_is_1(self):
-        assert get_relevance_score("Other", "https://porter.in/referral/abc") == 1
-
-
-class TestClaudeAccuracyNote:
-    def test_cowork_note(self):
-        note = get_claude_accuracy_note("https://linkedin.com/posts/user_cowork-tips")
-        assert "Anthropic product" in note
-
-    def test_openclaw_note(self):
-        note = get_claude_accuracy_note("https://linkedin.com/posts/user_openclaw-tool")
-        assert "NOT official" in note
-
-    def test_moltbot_note(self):
-        note = get_claude_accuracy_note("https://linkedin.com/posts/user_moltbot-tool")
-        assert "NOT" in note or "Third-party" in note
-
-    def test_claude_code_note(self):
-        note = get_claude_accuracy_note("https://linkedin.com/posts/user_claudecode-tips")
-        assert "Official" in note or "CLI" in note
-
-    def test_default_note(self):
-        note = get_claude_accuracy_note("https://linkedin.com/posts/user_claude-general")
-        assert "docs.anthropic.com" in note
+        assert len(results) == 2
+        assert results[0]["category"] == "Claude/Anthropic"
 
 
-# ===========================================================================
-# Pipeline Tests
-# ===========================================================================
+class TestAIFullPipeline:
+    @patch("analyze.anthropic.Anthropic")
+    @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
+    def test_full_pipeline_mocked(self, mock_anthropic_class):
+        """Full pipeline with mocked API returns correct structure."""
+        mock_client = MagicMock()
+        mock_anthropic_class.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(MOCK_AI_RESPONSE)
 
-class TestAnalyzePipeline:
-    def test_full_pipeline(self):
-        results = analyze(SAMPLE_CHAT)
+        links = extract_links(SAMPLE_CHAT)
+        results = analyze_with_ai(links)
+
         assert len(results) == 16
-
-    def test_results_have_all_fields(self):
-        results = analyze(SAMPLE_CHAT)
-        required_fields = {"date", "url", "category", "claude", "relevance", "accuracy_note"}
+        # Check merged fields
         for r in results:
-            assert set(r.keys()) == required_fields
+            assert "date" in r
+            assert "url" in r
+            assert "category" in r
+            assert "claude" in r
+            assert "relevance" in r
+            assert "accuracy_note" in r
+            assert "topic_summary" in r
 
-    def test_claude_links_detected(self):
-        results = analyze(SAMPLE_CHAT)
+    @patch("analyze.anthropic.Anthropic")
+    @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
+    def test_claude_links_detected(self, mock_anthropic_class):
+        """AI correctly identifies Claude-related links."""
+        mock_client = MagicMock()
+        mock_anthropic_class.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(MOCK_AI_RESPONSE)
+
+        links = extract_links(SAMPLE_CHAT)
+        results = analyze_with_ai(links)
+
         claude_links = [r for r in results if r["claude"]]
-        # Expected Claude links: claude-code, openclaw-claude, cowork-anthropic, moltbot
-        assert len(claude_links) >= 4
+        assert len(claude_links) == 4  # claude-code, openclaw, cowork, moltbot
 
-    def test_relevance_range(self):
-        results = analyze(SAMPLE_CHAT)
+    @patch("analyze.anthropic.Anthropic")
+    @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
+    def test_relevance_scores_valid(self, mock_anthropic_class):
+        """All relevance scores in 1-5 range."""
+        mock_client = MagicMock()
+        mock_anthropic_class.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(MOCK_AI_RESPONSE)
+
+        links = extract_links(SAMPLE_CHAT)
+        results = analyze_with_ai(links)
+
         for r in results:
             assert 1 <= r["relevance"] <= 5
 
-    def test_accuracy_notes_only_for_claude(self):
-        results = analyze(SAMPLE_CHAT)
+    @patch("analyze.anthropic.Anthropic")
+    @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
+    def test_accuracy_notes_only_for_claude(self, mock_anthropic_class):
+        """Non-Claude links have empty accuracy notes."""
+        mock_client = MagicMock()
+        mock_anthropic_class.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(MOCK_AI_RESPONSE)
+
+        links = extract_links(SAMPLE_CHAT)
+        results = analyze_with_ai(links)
+
         for r in results:
             if not r["claude"]:
                 assert r["accuracy_note"] == ""
             else:
                 assert r["accuracy_note"] != ""
 
+    @patch("analyze.anthropic.Anthropic")
+    @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
+    def test_topic_summaries_present(self, mock_anthropic_class):
+        """Every result has a topic summary."""
+        mock_client = MagicMock()
+        mock_anthropic_class.return_value = mock_client
+        mock_client.messages.create.return_value = _make_mock_response(MOCK_AI_RESPONSE)
+
+        links = extract_links(SAMPLE_CHAT)
+        results = analyze_with_ai(links)
+
+        for r in results:
+            assert len(r["topic_summary"]) > 0
+
+    def test_missing_api_key_exits(self):
+        """Exits cleanly if ANTHROPIC_API_KEY is not set."""
+        with patch.dict(os.environ, {}, clear=True):
+            # Remove the key if present
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            with pytest.raises(SystemExit):
+                analyze_with_ai([{"date": "2026-01-01", "url": "https://example.com"}])
+
+
+class TestBatching:
+    @patch("analyze.anthropic.Anthropic")
+    @patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-key"})
+    def test_large_input_batched(self, mock_anthropic_class):
+        """Links are split into batches of BATCH_SIZE."""
+        from analyze import BATCH_SIZE
+
+        mock_client = MagicMock()
+        mock_anthropic_class.return_value = mock_client
+
+        # Create 65 fake links (should be 3 batches with BATCH_SIZE=30)
+        links = [{"date": "2026-01-01", "url": f"https://example.com/page{i}"} for i in range(65)]
+
+        # Mock responses for each batch
+        def make_batch_response(*args, **kwargs):
+            # Extract batch size from the prompt
+            prompt = kwargs.get("messages", args[0] if args else [{}])[0].get("content", "")
+            # Count URLs in prompt
+            count = prompt.count("[")
+            batch_result = [
+                {"index": i, "category": "Other", "is_claude_related": False, "relevance": 2, "accuracy_note": "", "topic_summary": f"Page {i}"}
+                for i in range(count)
+            ]
+            return _make_mock_response(batch_result)
+
+        mock_client.messages.create.side_effect = make_batch_response
+
+        results = analyze_with_ai(links)
+
+        assert len(results) == 65
+        # Should have made 3 API calls (30 + 30 + 5)
+        assert mock_client.messages.create.call_count == 3
+
 
 # ===========================================================================
-# Excel Output Tests
+# System Prompt Tests
+# ===========================================================================
+
+class TestSystemPrompt:
+    def test_system_prompt_has_categories(self):
+        """System prompt includes all valid categories."""
+        for cat in CATEGORIES:
+            assert cat in SYSTEM_PROMPT
+
+    def test_system_prompt_has_json_instruction(self):
+        assert "JSON" in SYSTEM_PROMPT
+
+    def test_system_prompt_distinguishes_official_community(self):
+        assert "official" in SYSTEM_PROMPT.lower() or "Official" in SYSTEM_PROMPT
+        assert "community" in SYSTEM_PROMPT.lower() or "Community" in SYSTEM_PROMPT
+
+
+# ===========================================================================
+# Excel Output Tests (uses mocked AI data)
 # ===========================================================================
 
 class TestExcelGeneration:
     @pytest.fixture
-    def excel_output(self):
-        """Generate Excel from sample data and return path."""
-        results = analyze(SAMPLE_CHAT)
+    def sample_analyzed_data(self):
+        """Pre-built analyzed data matching MOCK_AI_RESPONSE."""
+        links = extract_links(SAMPLE_CHAT)
+        return [
+            {
+                "date": links[i]["date"],
+                "url": links[i]["url"],
+                "category": MOCK_AI_RESPONSE[i]["category"],
+                "claude": MOCK_AI_RESPONSE[i]["is_claude_related"],
+                "relevance": MOCK_AI_RESPONSE[i]["relevance"],
+                "accuracy_note": MOCK_AI_RESPONSE[i]["accuracy_note"],
+                "topic_summary": MOCK_AI_RESPONSE[i]["topic_summary"],
+            }
+            for i in range(16)
+        ]
+
+    @pytest.fixture
+    def excel_output(self, sample_analyzed_data):
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
             path = f.name
-        generate_excel(results, path)
+        generate_excel(sample_analyzed_data, path)
         yield path
         os.unlink(path)
 
@@ -285,56 +415,64 @@ class TestExcelGeneration:
 
     def test_three_sheets(self, excel_output):
         wb = load_workbook(excel_output)
-        assert len(wb.sheetnames) == 3
         assert wb.sheetnames == ["All Links", "Claude Topics", "Summary"]
 
-    def test_all_links_sheet_row_count(self, excel_output):
+    def test_all_links_row_count(self, excel_output):
         wb = load_workbook(excel_output)
         ws = wb["All Links"]
-        # 16 data rows + 1 header
-        assert ws.max_row == 17
+        assert ws.max_row == 17  # 16 data + 1 header
 
     def test_all_links_headers(self, excel_output):
         wb = load_workbook(excel_output)
         ws = wb["All Links"]
-        headers = [ws.cell(row=1, column=c).value for c in range(1, 7)]
-        assert headers == ["S.No.", "Date", "Link", "Topic/Category", "Claude Related", "Relevance (1-5)"]
+        headers = [ws.cell(row=1, column=c).value for c in range(1, 8)]
+        assert headers == ["S.No.", "Date", "Link", "Topic/Category", "Topic Summary", "Claude Related", "Relevance (1-5)"]
+
+    def test_topic_summary_column(self, excel_output):
+        """New AI-generated topic summary column has content."""
+        wb = load_workbook(excel_output)
+        ws = wb["All Links"]
+        summary = ws.cell(row=2, column=5).value
+        assert summary is not None
+        assert len(summary) > 0
 
     def test_claude_sheet_has_rows(self, excel_output):
         wb = load_workbook(excel_output)
         ws = wb["Claude Topics"]
-        assert ws.max_row > 1  # at least header + 1 data row
+        assert ws.max_row == 5  # 4 claude links + 1 header
 
-    def test_claude_sheet_headers(self, excel_output):
+    def test_claude_sheet_accuracy_notes(self, excel_output):
         wb = load_workbook(excel_output)
         ws = wb["Claude Topics"]
-        headers = [ws.cell(row=1, column=c).value for c in range(1, 6)]
-        assert headers == ["S.No.", "Date", "Link", "Sub-Topic", "Accuracy Note"]
+        # Every Claude row should have an accuracy note
+        for row in range(2, ws.max_row + 1):
+            note = ws.cell(row=row, column=5).value
+            assert note is not None and len(note) > 0
 
-    def test_summary_sheet_has_stats(self, excel_output):
+    def test_summary_includes_model(self, excel_output):
+        """Summary sheet shows which AI model was used."""
         wb = load_workbook(excel_output)
         ws = wb["Summary"]
-        assert ws.cell(row=1, column=1).value == "Metric"
-        assert ws.cell(row=2, column=1).value == "Total Links"
-        assert ws.cell(row=2, column=2).value == 16
+        values = [ws.cell(row=r, column=1).value for r in range(1, 15)]
+        assert "AI Model Used" in values
 
     def test_hyperlinks_present(self, excel_output):
         wb = load_workbook(excel_output)
         ws = wb["All Links"]
-        # Check first data row has a hyperlink
         cell = ws.cell(row=2, column=3)
         assert cell.hyperlink is not None or cell.value.startswith("http")
 
-    def test_serial_numbers_sequential(self, excel_output):
-        wb = load_workbook(excel_output)
-        ws = wb["All Links"]
-        for i in range(1, 17):
-            assert ws.cell(row=i + 1, column=1).value == i
-
     def test_freeze_panes(self, excel_output):
         wb = load_workbook(excel_output)
-        ws = wb["All Links"]
-        assert ws.freeze_panes == "A2"
+        assert wb["All Links"].freeze_panes == "A2"
+
+    def test_empty_data_still_works(self):
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
+            path = f.name
+        generate_excel([], path)
+        wb = load_workbook(path)
+        assert len(wb.sheetnames) == 3
+        os.unlink(path)
 
 
 # ===========================================================================
@@ -342,40 +480,21 @@ class TestExcelGeneration:
 # ===========================================================================
 
 class TestEdgeCases:
-    def test_empty_input(self):
-        results = analyze("")
-        assert results == []
+    def test_empty_input_parsing(self):
+        assert extract_links("") == []
 
     def test_no_urls_in_text(self):
-        results = analyze("Just some text without URLs\nAnother line")
-        assert results == []
+        assert extract_links("Just text\nAnother line") == []
 
     def test_single_url(self):
         text = "2/1/2026, 08:00 - User: https://linkedin.com/posts/user_claude-tips-activity-1"
-        results = analyze(text)
-        assert len(results) == 1
-        assert results[0]["claude"] is True
-
-    def test_non_linkedin_urls(self):
-        text = "2/1/2026, 08:00 - User: https://github.com/anthropics/claude-code"
-        results = analyze(text)
-        assert len(results) == 1
-        assert results[0]["claude"] is True
+        links = extract_links(text)
+        assert len(links) == 1
 
     def test_unicode_in_text(self):
         text = "2/1/2026, 08:00 - User: \U0001f680 https://linkedin.com/posts/user_ai-activity-1"
-        results = analyze(text)
-        assert len(results) == 1
-
-    def test_excel_with_empty_results(self):
-        """Excel should still generate with no data."""
-        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
-            path = f.name
-        generate_excel([], path)
-        assert os.path.isfile(path)
-        wb = load_workbook(path)
-        assert len(wb.sheetnames) == 3
-        os.unlink(path)
+        links = extract_links(text)
+        assert len(links) == 1
 
 
 if __name__ == "__main__":

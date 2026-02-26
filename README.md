@@ -1,12 +1,23 @@
-# 🔗 Link Analyzer
+# 🔗 Link Analyzer Agent
 
-Parse WhatsApp/chat exports, categorize every shared link, and generate a professional Excel report — with special attention to Claude/Anthropic content.
+AI-powered WhatsApp chat link analysis using **Claude API**. Parses shared links, sends them to Claude for intelligent categorization, and generates a professional Excel report.
+
+## Why AI?
+
+Unlike keyword-matching scripts, this agent uses Claude to **understand context**:
+- A URL with "code" in a Claude context → Claude/Anthropic, not Coding
+- A Stanford link about AI safety → Education, not just "stanford keyword match"
+- A LinkedIn post about "hiring AI agents" → Career/Jobs, not AI Agents
+- Generates human-readable topic summaries for every link
 
 ## Quick Start
 
 ```bash
 # Install
 pip install -r requirements.txt
+
+# Set API key
+export ANTHROPIC_API_KEY='sk-ant-...'
 
 # Run
 python analyze.py chat_export.txt output.xlsx
@@ -16,53 +27,46 @@ chmod +x run.sh
 ./run.sh chat_export.txt
 ```
 
-**Pipe from stdin:**
-```bash
-cat chat.txt | python analyze.py - output.xlsx
+## How It Works
+
+```
+WhatsApp .txt → [Regex Parser] → URLs + dates
+              → [Claude API ×N batches] → categories, scores, summaries
+              → [openpyxl] → formatted Excel workbook
 ```
 
-## What It Does
+1. **Parse** — Regex extracts URLs and timestamps (deterministic, fast)
+2. **Analyze** — URLs sent to Claude Sonnet in batches of 30 for categorization
+3. **Generate** — Results written to a 3-sheet Excel workbook
 
-1. **Parses** all URLs with timestamps from WhatsApp chat exports
-2. **Categorizes** each link (Claude/Anthropic, AI/ML, Voice AI, Business, Education, etc.)
-3. **Flags** Claude-related content with accuracy notes (official vs. community projects)
-4. **Scores** relevance 1–5
-5. **Generates** a formatted Excel workbook with 3 sheets:
+## Output
 
 | Sheet | Contents |
 |-------|----------|
-| **All Links** | Every link with date, category, Claude flag, relevance score |
-| **Claude Topics** | Claude-specific links with verification/accuracy notes |
-| **Summary** | Stats: total links, date range, category distribution |
+| **All Links** | S.No, Date, Link, Category, **AI Topic Summary**, Claude flag, Relevance |
+| **Claude Topics** | Claude-specific links with accuracy/verification notes |
+| **Summary** | Stats, model used, category distribution |
 
-## Use with Claude Code
+## Cost
 
-Drop the `CLAUDE.md` file in your project and run:
-
-```bash
-cat chat.txt | claude "Analyze all links per CLAUDE.md instructions"
-```
-
-## Categories Detected
-
-- Claude/Anthropic (cowork, openclaw, clawdbot, claude code, etc.)
-- Voice AI / TTS
-- AI Prompting, RAG, AI Agents
-- Coding / Dev Tools
-- Education / Learning
-- Business / Sales, Career / Jobs
-- Product Management
-- Tech Companies (OpenAI, DeepSeek, Google, etc.)
-- And more...
+~459 links = ~16 API calls × ~2K tokens each ≈ **$0.10-0.15** per run (Sonnet pricing).
 
 ## Testing
 
 ```bash
-pip install pytest
 python -m pytest test_analyze.py -v
 ```
 
-68 tests covering parsing, categorization, relevance scoring, Excel output, and edge cases.
+All tests use **mocked API calls** — no real API key or charges needed for testing.
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | (required) | Your Anthropic API key |
+| `MODEL` | `claude-sonnet-4-20250514` | Model to use (edit in analyze.py) |
+| `BATCH_SIZE` | 30 | Links per API call |
+| `MAX_RETRIES` | 3 | Retry attempts on failure |
 
 ## Supported Chat Formats
 
