@@ -12,9 +12,23 @@ if [ ! -f "$FILE" ]; then
     exit 1
 fi
 
+# Load .env file if it exists (so Python dotenv isn't the only path)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
+fi
+
 if [ -z "$ANTHROPIC_API_KEY" ]; then
     echo "❌ ANTHROPIC_API_KEY not set."
-    echo "   export ANTHROPIC_API_KEY='sk-ant-...'"
+    echo ""
+    echo "  Option 1 — .env file (recommended):"
+    echo "    Create a .env file in this directory with:"
+    echo "    ANTHROPIC_API_KEY=sk-ant-your-key-here"
+    echo ""
+    echo "  Option 2 — Environment variable:"
+    echo "    export ANTHROPIC_API_KEY='sk-ant-your-key-here'"
+    echo ""
+    echo "  Get your key at: https://console.anthropic.com/settings/keys"
     exit 1
 fi
 
@@ -26,4 +40,4 @@ for pkg in anthropic openpyxl; do
     fi
 done
 
-python3 "$(dirname "$0")/analyze.py" "$FILE" "$OUTPUT"
+python3 "$SCRIPT_DIR/analyze.py" "$FILE" "$OUTPUT"
